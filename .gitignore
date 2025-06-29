@@ -3,9 +3,14 @@
 *.xlsx
 *.db
 
+
 # 忽略opcode日志目录
+failed_hashes.txt
 contract_opcode/
 contract_opcode_trace/
 csv_benchmark_traces_output_cn/
 benchmark_traces/
 eth-tester/
+
+# 忽略vscode配置文件
+.vscode/
