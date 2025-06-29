@@ -1,0 +1,10 @@
+# 忽略大型数据库和数据文件
+*.csv
+*.db
+
+# 忽略opcode日志目录
+contract_opcode/
+contract_opcode_trace/
+csv_benchmark_traces_output_cn/
+benchmark_traces/
+eth-tester/
