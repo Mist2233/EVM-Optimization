@@ -14,3 +14,6 @@ eth-tester/
 
 # 忽略vscode配置文件
 .vscode/
+
+# 忽略 Python 的字节码缓存文件夹
+__pycache__/
