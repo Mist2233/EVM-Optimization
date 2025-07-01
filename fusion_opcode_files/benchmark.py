@@ -45,8 +45,8 @@ error_logger = setup_error_logger()
 
 # --- 配置: 用户需要确保这些路径和类是正确的 ---
 try:
-    from custom_computation import FusedComputation, BaseComputationForFusion, IdenticalComputation
-    OriginalComputation = BaseComputationForFusion 
+    from custom_computation import FusedComputation, IdenticalComputation
+    OriginalComputation = IdenticalComputation 
 except ImportError:
     print("严重错误: 无法从 custom_computation.py 导入 FusedComputation 或 BaseComputationForFusion。")
     sys.exit(1)
@@ -123,14 +123,17 @@ def run_and_time_transaction(
 
 def main_benchmark_from_csv():
     # --- 设定要测试的 fused opcode ---
-    # rules_to_test = ["SUB_MUL"]
-    # FusedComputation.configure_rules(rules_to_test)
-    # print(f"当前测试的 fused opcodes 为{rules_to_test}")
+    rules_to_test = ["SUB_MUL"]
+    FusedComputation.configure_rules(rules_to_test)
+    print(f"当前测试的 fused opcodes 为{rules_to_test}")
 
     # --- 主要配置 ---
     csv_path = "200k_transactions_with_inputs.csv" 
-    max_transactions_to_process = 200
-    ENABLE_DETAILED_TRACING = True
+    max_transactions_to_process = 1000
+    # 是否为正式测试的交易生成详细的 opcode trace 文件
+    ENABLE_DETAILED_TRACING = False
+    # 是否启用热身阶段来消除系统预热效应
+    ENABLE_WARMUP = True
 
     print(f"正在从CSV文件加载交易: {csv_path}")
     try:
@@ -194,16 +197,17 @@ def main_benchmark_from_csv():
             signed_tx_object = unsigned_tx.as_signed_transaction(signer_private_key)
                 
             # ---- 插入热身阶段 ----
+            if ENABLE_WARMUP:
             # # 1. 为原始VM热身
-            db_warmup_orig = AtomicDB()
-            chain_warmup_orig = Chain_Original_Config.from_genesis(db_warmup_orig, current_genesis_params, current_genesis_state)
-            # 只运行，不计时，不记录结果
-            run_and_time_transaction(chain_warmup_orig, signed_tx_object, enable_tracing=False)
+                db_warmup_orig = AtomicDB()
+                chain_warmup_orig = Chain_Original_Config.from_genesis(db_warmup_orig, current_genesis_params, current_genesis_state)
+                # 只运行，不计时，不记录结果
+                run_and_time_transaction(chain_warmup_orig, signed_tx_object, enable_tracing=False)
 
-            # # 2. 为融合VM热身
-            db_warmup_fused = AtomicDB()
-            chain_warmup_fused = Chain_Fused_Config.from_genesis(db_warmup_fused, current_genesis_params, current_genesis_state)
-            run_and_time_transaction(chain_warmup_fused, signed_tx_object, enable_tracing=False)
+                # # 2. 为融合VM热身
+                db_warmup_fused = AtomicDB()
+                chain_warmup_fused = Chain_Fused_Config.from_genesis(db_warmup_fused, current_genesis_params, current_genesis_state)
+                run_and_time_transaction(chain_warmup_fused, signed_tx_object, enable_tracing=False)
 
             # -- 执行原始VM --
             db_orig_run = AtomicDB()
