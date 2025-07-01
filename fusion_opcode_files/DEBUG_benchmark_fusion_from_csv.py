@@ -25,7 +25,7 @@ import sys # 用于 sys.stdout 重定向和 sys.path
 try:
     # 假设 custom_computation.py 定义了 FusedComputation 和一个 BaseComputationForFusion
     # BaseComputationForFusion 应该是你目标分叉的标准 py-evm Computation 类
-    from custom_computation import FusedComputation, BaseComputationForFusion 
+    from fusion_opcode_files.custom_computation_origin import FusedComputation, BaseComputationForFusion 
     OriginalComputation = BaseComputationForFusion 
 except ImportError:
     print("严重错误: 无法从 custom_computation.py 导入 FusedComputation 或 BaseComputationForFusion。")
@@ -171,7 +171,7 @@ def run_and_time_transaction(
 def main_benchmark_from_csv():
     # --- Debug Mode Switch ---
     DEBUG_MODE_ENABLED = True  # <<<< 用户: 设置为 True 以启用调试模式 (打印更多信息)
-    DEBUG_TX_HASH = "0x4bfa4e2d959b4ac7ba0a5985b4e1f90bd5d1471e7fbcba339975eed3e1f634b8"
+    DEBUG_TX_HASH = "0xbf728adaf1b56721fffef8746e437e1786aa50ca013610679858bb61c1effafc"
     # --- End Debug Mode Switch ---
 
     csv_path = "test_transactions.csv"  # 你的CSV文件路径
@@ -234,7 +234,7 @@ def main_benchmark_from_csv():
         print(f"\n[{idx + 1}/{len(df)}] 处理交易哈希: {tx_hash}")
 
         target_contract_hex = row.get('to')
-        calldata_str = str(row.get('callingFunction', '0x')) # 确保是字符串
+        calldata_str = str(row.get('inputData', '0x')) # 确保是字符串
 
         if pd.isna(target_contract_hex) or not isinstance(target_contract_hex, str) or not is_hex(target_contract_hex):
             print(f"  跳过交易 {tx_hash}: 无效或缺失 'to' 地址 ('{target_contract_hex}').")
