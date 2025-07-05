@@ -10,11 +10,11 @@ JUMP_OPCODE = 0x56
 SUB_OPCODE = 0x03
 MUL_OPCODE = 0x02
 ADD_OPCODE = 0x01
+DUP1_OPCODE = 0x80
 
 # --- 虚拟的融合操作码ID (Virtual Fused Opcode IDs) ---
-VIRTUAL_UJUMP2_OPCODE = 0xB0 
-VIRTUAL_SUB_MUL_OPCODE = 0xB1
-VIRTUAL_PUSH1_ADD_OPCODE = 0xB2
+VIRTUAL_SUB_MUL_OPCODE = 0xB0
+VIRTUAL_PUSH1_DUP1_OPCODE = 0xB1
 
 
 # =================================================================
@@ -30,9 +30,8 @@ OPCODE_MNEMONICS = {
     MUL_OPCODE: "MUL",
     ADD_OPCODE: "ADD",
     # --- 融合后的操作码也可以加进来 ---
-    VIRTUAL_UJUMP2_OPCODE: "FUSED_UJUMP2",
     VIRTUAL_SUB_MUL_OPCODE: "FUSED_SUB_MUL",
-    VIRTUAL_PUSH1_ADD_OPCODE: "FUSED_PUSH1_ADD",
+    VIRTUAL_PUSH1_DUP1_OPCODE: "FUSED_PUSH1_DUP1"
 }
 
 
@@ -41,33 +40,22 @@ OPCODE_MNEMONICS = {
 # =================================================================
 # 这部分结构保持不变。
 ALL_FUSION_RULES = {
-    "PUSH2_JUMP": {
-        "rule_name": "PUSH2_JUMP",
-        "trigger_opcode": PUSH2_OPCODE,
-        "pattern_opcodes": (JUMP_OPCODE,),
-        "trigger_arg_bytes": 2,
-        "pattern_bytes": 1,
-        "fused_opcode_id": VIRTUAL_UJUMP2_OPCODE,
-        "fused_mnemonic": OPCODE_MNEMONICS.get(VIRTUAL_UJUMP2_OPCODE)
-    },
-
     "SUB_MUL": {
         "rule_name": "SUB_MUL",
         "trigger_opcode": SUB_OPCODE,
-        "pattern_opcodes": (MUL_OPCODE,),
+        "pattern_opcodes": b'\x02',
         "trigger_arg_bytes": 0,
         "pattern_bytes": 1,
         "fused_opcode_id": VIRTUAL_SUB_MUL_OPCODE,
         "fused_mnemonic": OPCODE_MNEMONICS.get(VIRTUAL_SUB_MUL_OPCODE)
     },
-    
-    "PUSH1_ADD": {
-        "rule_name": "PUSH1_ADD",
+    "PUSH1_DUP1": {
+        "rule_name": "PUSH1_DUP1",
         "trigger_opcode": PUSH1_OPCODE,
-        "pattern_opcodes": (ADD_OPCODE,),
-        "trigger_arg_bytes": 1,
-        "pattern_bytes": 1,
-        "fused_opcode_id": VIRTUAL_PUSH1_ADD_OPCODE,
-        "fused_mnemonic": OPCODE_MNEMONICS.get(VIRTUAL_PUSH1_ADD_OPCODE)
+        "pattern_opcodes": b'\x80',  # 这是 DUP1 对应的字节码的值。之所以这样设定，是因为我们的操作码在检测时，是直接比较byte的值，这样设定使得类型统一，可以比较成功。
+        "trigger_arg_bytes": 1,      # PUSH1 有1个字节的参数
+        "pattern_bytes": 1,          # DUP1 指令本身占1个字节
+        "fused_opcode_id": VIRTUAL_PUSH1_DUP1_OPCODE,
+        "fused_mnemonic": "FUSED_PUSH1_DUP1"
     },
 }

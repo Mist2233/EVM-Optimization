@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import pandas as pd
 import json
@@ -8,6 +9,13 @@ from typing import Optional, Tuple, Any
 from tqdm import tqdm
 # 新增: 导入logging模块用于记录错误到文件
 import logging
+
+# --- 路径修复 (确保能找到所有模块) ---
+# 这几行代码现在至关重要，它能确保 Python 找到我们的 custom_forks 目录
+current_script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_script_dir)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 from contextlib import redirect_stdout, redirect_stderr
 
@@ -45,8 +53,15 @@ error_logger = setup_error_logger()
 
 # --- 配置: 用户需要确保这些路径和类是正确的 ---
 try:
-    from custom_computation import FusedComputation, BaseComputationForFusion, IdenticalComputation
-    OriginalComputation = BaseComputationForFusion 
+    from custom_computation import FusedComputation, IdenticalComputation
+    from fused_cancun.computation import FusedCancunComputation
+    OriginalComputation = IdenticalComputation 
+
+    # === 核心修改 1: 使用更清晰的变量名来定义控制组和实验组 ===
+    # 控制组/基准：使用我们“什么都没做”的子类，以获得最精确的对比基准
+    ControlComputation = IdenticalComputation
+    # 实验组：使用我们真正实现了融合逻辑的类
+    ExperimentComputation = FusedCancunComputation
 except ImportError:
     print("严重错误: 无法从 custom_computation.py 导入 FusedComputation 或 BaseComputationForFusion。")
     sys.exit(1)
@@ -122,15 +137,21 @@ def run_and_time_transaction(
 
 
 def main_benchmark_from_csv():
+    # === 新增：一个用来汇总所有计数结果的字典 ===
+    total_fusion_hits = {}
+
     # --- 设定要测试的 fused opcode ---
-    # rules_to_test = ["SUB_MUL"]
-    # FusedComputation.configure_rules(rules_to_test)
-    # print(f"当前测试的 fused opcodes 为{rules_to_test}")
+    rules_to_test = ["SUB_MUL"]
+    ExperimentComputation.configure_rules(rules_to_test)
+    print(f"当前测试的 fused opcodes 为{rules_to_test}")
 
     # --- 主要配置 ---
     csv_path = "200k_transactions_with_inputs.csv" 
-    max_transactions_to_process = 200
-    ENABLE_DETAILED_TRACING = True
+    max_transactions_to_process = 100
+    # 是否为正式测试的交易生成详细的 opcode trace 文件
+    ENABLE_DETAILED_TRACING = False
+    # 是否启用热身阶段来消除系统预热效应
+    ENABLE_WARMUP = True
 
     print(f"正在从CSV文件加载交易: {csv_path}")
     try:
@@ -147,11 +168,20 @@ def main_benchmark_from_csv():
         return
 
     # --- VM 和 Chain 配置 ---
-    class VM_Original_CSV(CancunVM): computation_class = OriginalComputation
-    Chain_Original_Config = Chain.configure(__name__="Chain_Original_CSV_Cfg", vm_configuration=((constants.GENESIS_BLOCK_NUMBER, VM_Original_CSV),))
-    class VM_Fused_CSV(CancunVM): computation_class = IdenticalComputation
-    Chain_Fused_Config = Chain.configure(__name__="Chain_Fused_CSV_Cfg", vm_configuration=((constants.GENESIS_BLOCK_NUMBER, VM_Fused_CSV),))
+    # 控制组VM，使用 ControlComputation
+    class VM_Control(CancunVM):
+        computation_class = ControlComputation
+    Chain_Control_Config = Chain.configure(__name__="Chain_Control_Cfg", vm_configuration=((constants.GENESIS_BLOCK_NUMBER, VM_Control),))
 
+    # === 核心修改 3: 实验组VM必须使用 ExperimentComputation ===
+    # 你之前的代码在这里错误地使用了 IdenticalComputation，导致没有融合被执行
+    # class VM_Experiment(CancunVM):
+    #     computation_class = ExperimentComputation
+
+    # 直接用我们新定义的 fork 作为实验组的虚拟机
+    from CustomForks.fused_cancun import FusedCancunVM as VM_Experiment
+    Chain_Experiment_Config = Chain.configure(__name__="Chain_Experiment_Cfg", vm_configuration=((constants.GENESIS_BLOCK_NUMBER, VM_Experiment),))
+    
     all_tx_benchmark_results = []
     output_dir = "csv_benchmark_traces_output_cn"
     os.makedirs(output_dir, exist_ok=True)
@@ -185,42 +215,72 @@ def main_benchmark_from_csv():
             current_genesis_state = prepare_genesis_state(target_contract_hex, test_account.address, contract_bytecode)
             
             db_tx_setup = AtomicDB()
-            chain_tx_setup = Chain_Original_Config.from_genesis(db_tx_setup, current_genesis_params, current_genesis_state)
+            chain_tx_setup = Chain_Control_Config.from_genesis(db_tx_setup, current_genesis_params, current_genesis_state)
             vm_tx_setup = chain_tx_setup.get_vm()
             
             sender_nonce_for_tx = vm_tx_setup.state.get_nonce(to_canonical_address(test_account.address))
             unsigned_tx = vm_tx_setup.create_unsigned_transaction(nonce=sender_nonce_for_tx, gas_price=tx_gas_price, gas=tx_gas_limit, to=to_canonical_address(target_contract_hex), value=tx_value, data=tx_data)
             signer_private_key = keys.PrivateKey(test_account.key)
             signed_tx_object = unsigned_tx.as_signed_transaction(signer_private_key)
+                
+            # ---- 插入热身阶段 ----
+            if ENABLE_WARMUP:
+                # 热身阶段现在也使用更清晰的命名
+                db_warmup_ctrl = AtomicDB()
+                chain_warmup_ctrl = Chain_Control_Config.from_genesis(db_warmup_ctrl, current_genesis_params, current_genesis_state)
+                run_and_time_transaction(chain_warmup_ctrl, signed_tx_object, enable_tracing=False)
 
-            # -- 执行融合VM --
-            db_fused_run = AtomicDB()
-            chain_fused_instance = Chain_Fused_Config.from_genesis(db_fused_run, current_genesis_params, current_genesis_state)
-            trace_fused_path = None
+                db_warmup_exp = AtomicDB()
+                chain_warmup_exp = Chain_Experiment_Config.from_genesis(db_warmup_exp, current_genesis_params, current_genesis_state)
+                run_and_time_transaction(chain_warmup_exp, signed_tx_object, enable_tracing=False)
+
+            # --- 正式计时测试 ---
+            # 1. 执行控制组 (Control)
+            db_ctrl_run = AtomicDB()
+            chain_ctrl_instance = Chain_Control_Config.from_genesis(db_ctrl_run, current_genesis_params, current_genesis_state)
+            trace_ctrl_path = None
             if ENABLE_DETAILED_TRACING:
                 tx_hash_for_file = tx_hash.replace("0x", "")[:12] if isinstance(tx_hash, str) else f"idx{idx}"
-                trace_fused_path = os.path.join(output_dir, f"trace_融合_{tx_hash_for_file}.txt")
-
-            dur_fused, suc_fused, rec_fused, _ = run_and_time_transaction(chain_fused_instance, signed_tx_object, enable_tracing=ENABLE_DETAILED_TRACING, trace_filepath=trace_fused_path)
+                short_contract_hex = target_contract_hex.replace("0x", "")[:8]
+                trace_ctrl_path = os.path.join(output_dir, f"trace_控制组_{short_contract_hex}_{tx_hash_for_file}.txt")
             
+            # === 核心修改：填充了这里的参数 ===
+            dur_ctrl, suc_ctrl, rec_ctrl, _ = run_and_time_transaction(
+                chain_instance=chain_ctrl_instance,
+                signed_tx=signed_tx_object,
+                enable_tracing=ENABLE_DETAILED_TRACING,
+                trace_filepath=trace_ctrl_path
+            )
 
-            # -- 执行原始VM --
-            db_orig_run = AtomicDB()
-            chain_orig_instance = Chain_Original_Config.from_genesis(db_orig_run, current_genesis_params, current_genesis_state)
-            trace_orig_path = None
+            # 2. 执行实验组 (Experiment)
+            db_exp_run = AtomicDB()
+            chain_exp_instance = Chain_Experiment_Config.from_genesis(db_exp_run, current_genesis_params, current_genesis_state)
+            trace_exp_path = None
             if ENABLE_DETAILED_TRACING:
                 tx_hash_for_file = tx_hash.replace("0x", "")[:12] if isinstance(tx_hash, str) else f"idx{idx}"
-                trace_orig_path = os.path.join(output_dir, f"trace_原始_{tx_hash_for_file}.txt")
+                short_contract_hex = target_contract_hex.replace("0x", "")[:8]
+                trace_exp_path = os.path.join(output_dir, f"trace_实验组_{short_contract_hex}_{tx_hash_for_file}.txt")
+
+            # === 核心修改：填充了这里的参数 ===
+            dur_exp, suc_exp, rec_exp, comp_exp = run_and_time_transaction(
+                chain_instance=chain_exp_instance,
+                signed_tx=signed_tx_object,
+                enable_tracing=ENABLE_DETAILED_TRACING,
+                trace_filepath=trace_exp_path
+            )
             
-            dur_orig, suc_orig, rec_orig, _ = run_and_time_transaction(chain_orig_instance, signed_tx_object, enable_tracing=ENABLE_DETAILED_TRACING, trace_filepath=trace_orig_path)
-
-
-            if suc_orig and suc_fused:
+            # --- 记录结果 ---
+            if suc_ctrl and suc_exp:
                  all_tx_benchmark_results.append({
-                    "tx_hash": tx_hash, "avg_time_original_ms": dur_orig, "avg_time_fused_ms": dur_fused,
-                    "avg_gas_original": rec_orig.gas_used if rec_orig else None,
-                    "avg_gas_fused": rec_fused.gas_used if rec_fused else None,
+                    "tx_hash": tx_hash, 
+                    "avg_time_original_ms": dur_ctrl, # 使用控制组作为原始时间
+                    "avg_time_fused_ms": dur_exp,    # 使用实验组作为融合时间
+                    "avg_gas_original": rec_ctrl.gas_used if rec_ctrl else None,
+                    "avg_gas_fused": rec_exp.gas_used if rec_exp else None,
                  })
+                 if comp_exp and hasattr(comp_exp, 'fusion_hit_counts'):
+                    for rule_name, count in comp_exp.fusion_hit_counts.items():
+                        total_fusion_hits[rule_name] = total_fusion_hits.get(rule_name, 0) + count
             # 如果有任何一个执行失败 (但没有抛出致命异常)，则忽略这笔交易，不计入成功也不计入失败日志
             # 这通常意味着是一个可控的 REVERT
 
@@ -255,6 +315,14 @@ def main_benchmark_from_csv():
 
     else:
         print("\n没有可用于比较的成功交易。请检查 benchmark_errors.log 文件分析失败原因。")
+
+    # === 关键修改：打印融合规则的触发次数总结 ===
+    print("\n--- 融合规则触发次数总结 ---")
+    if total_fusion_hits:
+        for rule_name, count in total_fusion_hits.items():
+            print(f"  规则 '{rule_name}': 在所有成功交易中总共触发了 {count} 次")
+    else:
+        print("  在所有成功比较的交易中，没有任何融合规则被触发。")
 
 
 if __name__ == "__main__":
